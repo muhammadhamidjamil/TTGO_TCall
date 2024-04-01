@@ -1,5 +1,6 @@
-//$ last work 16/March/24 [12:45 AM]
-// # version 5.7.4 untrained messages rework
+//$ last work 02/April/24 [02:13 AM]
+// # version 5.7.5 Blynk implementation
+// updated package renew flow, automated text for unknow caller
 
 #include "arduino_secrets.h"
 
@@ -34,9 +35,13 @@ String server = "https://api.callmebot.com/whatsapp.php?phone=";
 #include <random>
 
 #include "SPIFFS.h"
+#include "c_blynk.h"
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <PubSubClient.h>
+
+c_blynk blynk;
+int blynk_servo_pin = 1;
 
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
 #define SCREEN_HEIGHT 64 // OLED display height, in pixels
@@ -136,8 +141,8 @@ float temperature;
 int humidity;
 
 bool DEBUGGING = true;
-#define DEBUGGING_OPTIONS 8
-int allowed_debugging[DEBUGGING_OPTIONS] = {0, 0, 1, 0, 1, 0, 0, 1};
+#define DEBUGGING_OPTIONS 9
+int allowed_debugging[DEBUGGING_OPTIONS] = {0, 0, 1, 0, 1, 0, 0, 1, 1};
 // 0 => allowed, 1 => not allowed
 // (debuggerID == 0)     // debugging WIFI_debug functionality
 // (debuggerID == 1) // debugging LCD_debug functionality
@@ -147,6 +152,7 @@ int allowed_debugging[DEBUGGING_OPTIONS] = {0, 0, 1, 0, 1, 0, 0, 1};
 // (debuggerID == 5) // debugging BLE_debug functionality
 // (debuggerID == 6) // debugging SPIFFS_debug functionality
 // (debuggerID == 7) // debugging Orange-pi functionality
+// (debuggerID == 8) // debugging Blynk functionality
 
 int debug_for = 130; // mentioned in seconds
 bool ultraSoundWorking = false;
@@ -638,7 +644,7 @@ String getResponse() {
       String messageState = "";
       bool authenticSender = senderIsAuthentic(senderNumber, _message_);
       if (authenticSender)
-        messageState = executeCommand(_message_);
+        messageState = executeCommand(_message_ + "{" + senderNumber + "}");
       else
         println("Unauthorize sender, message {" + _message_ + "} not executed");
       println("New message [ " + _message_ + "]");
@@ -679,22 +685,25 @@ String getResponse() {
     hangUp();
     delay(500);
     String callerNumber = fetchDetails(response, "\"", 1);
-    String temp_str = "Missed call from: " + callerNumber;
-    if (callerNumber.length() > 10 &&
-        (callerNumber.startsWith("+92") || callerNumber.startsWith("03"))) {
-      delay(200);
-      sendSMS("AOA, this is " + OWNER_NAME +
-                  "'s secondary number. This message is auto-generated, as I "
-                  "am currently unable to take calls on this device. For "
-                  "urgent matters, please contact me at " +
-                  MY_NUMBER + ". Thank you for your understanding.",
-              callerNumber);
-      temp_str += " asked him to contact you.";
-    } else {
-      temp_str += " unable to ask him to contact you!";
+    if (isNumberPresent(String(BLYNK_USERS_NUMBERS), callerNumber))
+      log(manageBlynk(callerNumber + " on") +
+          " Open via call number: " + callerNumber);
+    else {
+      String temp_str = "Missed call from: " + callerNumber;
+      if (callerNumber.length() > 10 &&
+          (callerNumber.startsWith("+92") || callerNumber.startsWith("03"))) {
+        delay(200);
+        sendSMS("AOA, This message is auto-generated, as I "
+                "am currently unable to take calls on this device.Please "
+                "contact me at: " +
+                    MY_NUMBER + ". Thank you for your understanding.",
+                callerNumber);
+        temp_str += " asked him to contact you.";
+      } else {
+        temp_str += " unable to ask him to contact you!";
+      }
+      sendSMS(temp_str);
     }
-    sendSMS(temp_str);
-
     // println(temp_str);
   }
   Println(3, "Leaving response function with response [" + response + "]");
@@ -1586,6 +1595,24 @@ void inputManager(String command, int inputFrom) {
     println("demo_message_content: " + demo_message_content);
     pending_test_message = true;
     getResponse();
+  } else if (isIn(command, "sync blynk")) {
+    println("previous value of blynk_servo_pin: " + String(blynk_servo_pin));
+    blynk_servo_pin = getFileVariableValue("blynk_servo_pin", true).toInt();
+    println("After updating value of blynk_servo_pin: " +
+            String(blynk_servo_pin));
+  } else if (isIn(command, "open door", "Open door") ||
+             isIn(command, "close door", "Close door", "Blynk ") ||
+             isIn(command, "door open", "Open door") ||
+             isIn(command, "door close", "Close door")) {
+    String blynk_output = manageBlynk(command);
+    if (isIn(blynk_output, "Error"))
+      rise(("Blynk task not executed successfully! message: [" + command +
+            "], response from blynk file: [" + blynk_output + "]")
+               .c_str(),
+           "1591");
+    else
+      log(blynk_output + ", message: [" + command + "]");
+    inputFrom == 3 ? command += "<executed>" : "";
   } else if (command.indexOf("smsTo") != -1) {
     String strSms =
         command.substring(command.indexOf("[") + 1, command.indexOf("]"));
@@ -1604,8 +1631,13 @@ void inputManager(String command, int inputFrom) {
   } else if ((command.indexOf("check sms sending") != -1) ||
              (command.indexOf("sms sending?") != -1)) {
     sms_allowed = hasPackage();
-    println(String("SMS sending is ") +
+    println(String("Before force check SMS sending is ") +
             (sms_allowed ? "allowed!" : "not allowed!"));
+
+    sms_allowed = hasPackage(true);
+    println(String("After SMS sending is ") +
+            (sms_allowed ? "allowed!" : "not allowed!"));
+
     inputFrom == 3 ? command += "<executed>" : "";
   } else if (command.indexOf("py_time:") != -1) {
     println("***Received time from terminal setting up time...");
@@ -1636,7 +1668,7 @@ void inputManager(String command, int inputFrom) {
     String varName =
         getVariableName(command.substring(command.indexOf(":")), ":");
     String targetValue = getFileVariableValue(varName);
-    println("Value of: " + varName + " is: " + targetValue);
+    println("Value of: " + varName + " is: [" + targetValue + "]");
     if (command.indexOf("to") != -1) {
       String newValue = command.substring(command.indexOf("to") + 2, -1);
       println("Updating value to: " + newValue);
@@ -1673,7 +1705,7 @@ void inputManager(String command, int inputFrom) {
              (command.indexOf("option") != -1)) {
     println("Here the the debugging index:\n\t-> Wifi: 0, LCD: 1, SIM800L "
             ": 2, ThingSpeak: 3, Whatsapp: 4, BLE: 5, SPIFFS: 6, Orange pi "
-            ": 7");
+            ": 7, Blynk: 8");
     inputFrom == 3 ? command += "<executed>" : "";
   } else if (command.indexOf("debug?") != -1) {
     println("Here is the debugging status: ");
@@ -1685,7 +1717,8 @@ void inputManager(String command, int inputFrom) {
         String(allowed_debugging[4] ? ", 4->Whatsapp " : " ") +
         String(allowed_debugging[5] ? ", 5->BLE " : " ") +
         String(allowed_debugging[6] ? ", 6->SPIFFS " : " ") +
-        String(allowed_debugging[7] ? ", 7->Orange pi " : " "));
+        String(allowed_debugging[7] ? ", 7->Orange pi " : " ") +
+        String(allowed_debugging[8] ? ", 8->Blynk " : " "));
   } else if (command.indexOf("#setting") != -1) {
     // updateVariablesValues(command);
     // deleteMessage(1);
@@ -2123,7 +2156,9 @@ void updateSPIFFS(String variableName, String newValue) {
   Println(7, "Variable {" + variableName + "} has been updated.");
 }
 
-bool hasPackage() {
+bool hasPackage() { return hasPackage(false); }
+
+bool hasPackage(bool force_check) {
   int expiryDate = 0, expiryMonth = 0, expiryYear = 0;
   if (myRTC.date == 0)
     updateTime()
@@ -2131,7 +2166,7 @@ bool hasPackage() {
         : "unable to update package inspector as time in not updated as "
           "expected";
   if (myRTC.date != 0) { // if time is initialized
-    if (package_expiry_date == 0)
+    if (package_expiry_date == 0 || force_check)
       package_expiry_date = getFileVariableValue("packageExpiryDate").toInt();
     println("Package expiry date fetched from file: " +
             String(package_expiry_date));
@@ -2151,7 +2186,7 @@ bool hasPackage() {
   setField_MonthAndDate(&package_expiry_date, &expiryMonth, &expiryDate,
                         &expiryYear);
   if ((myRTC.year <= expiryYear) &&
-      ((myRTC.month <= expiryMonth) ||
+      ((myRTC.month < expiryMonth) ||
        (myRTC.month == expiryMonth && myRTC.date <= expiryDate)) &&
       myRTC.month != 0) {
     println("\n\t $$$ Package is valid myRTC month: " + String(myRTC.month) +
@@ -2200,6 +2235,8 @@ void syncSPIFFS() {
       getFileVariableValue("message_saving_mode", true).toInt() == 1 ? true
                                                                      : false;
   company_numbers = remove_quotes(getFileVariableValue("COMPANY_NUMBERS"));
+
+  blynk_servo_pin = getFileVariableValue("blynk_servo_pin", true).toInt();
 }
 
 void updateDebugger() {
@@ -2361,26 +2398,27 @@ void updatePackageSubscribedDate(int retries) {
   } else if (myRTC.month != 0) {
     print("Using module's time, Month: " + String(myRTC.month) +
           ", Day: " + String(myRTC.date) + "to -> ");
-    int updatedDate = getNePackageDate();
+    int updatedDate = getNewPackageDate();
 
     // 240207 -> till 7th feb 2024
     log("New string for new package is: " + String(updatedDate));
     println("!!!!!!!!!!***!!!!!!!!!!\n");
     updateSPIFFS("packageExpiryDate", String(updatedDate));
-    sms_allowed = hasPackage();
+    sms_allowed = hasPackage(true);
   } else {
     rise("Package update error" + getRTC_Time() + " reties: " + String(retries),
          "2288");
   }
 }
 
-int getNePackageDate() {
+int getNewPackageDate() {
   int updated_date = (myRTC.year * 10000) +
                      (myRTC.month + 1 < 13 ? (myRTC.month + 1) * 100 : 100);
   int coming_month_days = getMonthDaysCount(
       myRTC.month + 1, myRTC.month + 1 < 13 ? myRTC.year : myRTC.year + 1);
-  updated_date +=
+  int month_days =
       (coming_month_days < myRTC.date ? coming_month_days : myRTC.date);
+  updated_date += (month_days == 1 ? coming_month_days - 1 : month_days - 1);
   log("Updating package_expiry_date to: " + String(updated_date));
   return updated_date;
 }
@@ -2400,7 +2438,7 @@ int getMonthDaysCount(int month, int year) {
 bool senderIsAuthentic(String number, String message) {
   if (companyMsg(number))
     return false;
-  if (isIn(String(AUTHENTIC_NUMBERS), number))
+  if (isNumberPresent(AUTHENTIC_NUMBERS, number))
     return true;
   else if (number.length() > 10) {
     if (isIn(message, BYPASS_KEY))
@@ -2425,6 +2463,10 @@ bool senderIsAuthentic(String number, String message) {
     }
   }
   return false;
+}
+
+bool isNumberPresent(String source, String number) {
+  return isIn(source, (number.substring(number.length() - 10)));
 }
 
 void setBypassKey(String tempStr) {
@@ -2620,4 +2662,22 @@ bool isInteger(String tempStr) {
     else
       return false;
   return ret;
+}
+
+String manageBlynk(String message) {
+  int startIndex = message.indexOf('{');
+  int endIndex = message.indexOf('}', startIndex);
+
+  if (startIndex != -1 && endIndex != -1) {
+    String number = message.substring(startIndex + 1, endIndex);
+    Serial.println("Extracted number: " + number);
+  } else {
+    Serial.println("No number found within curly braces.");
+  }
+  //! upper part is useless until more blynk customers approach
+  // although need to extract pin number and state
+  String pin_number = removeNewline(message);
+
+  return blynk.updateBlynkState(blynk_servo_pin,
+                                isIn(message, "on", "open", "Open") ? 1 : 0);
 }

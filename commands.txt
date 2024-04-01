@@ -70,3 +70,13 @@ OK
 
 
 demo message (2)[please ngrok on 6677]{+923354888420}
+
+demo message (2)[open door off]{+923354888420}
+
+
+usefull formates:
+
+Always use:
+  =>  {} for mobile number
+  =>  [] for message
+  =>  () for index
