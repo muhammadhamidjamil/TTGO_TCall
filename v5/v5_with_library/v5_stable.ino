@@ -1,6 +1,7 @@
-//$ last work 02/April/24 [02:13 AM]
-// # version 5.7.5 Blynk implementation
-// updated package renew flow, automated text for unknow caller
+//$ last work 27/April/24 [04:17 AM]
+// # version 5.7.6 Fix:
+// Bug: Message was not removed from stack and resend
+// Bug: Company messages was still forwarding
 
 #include "arduino_secrets.h"
 
@@ -654,7 +655,11 @@ String getResponse() {
         if (!companyMsg(senderNumber)) {
           sendSMS("<Unable to execute sms no. {" + String(newMessageNumber) +
                   "} message: > [ " + removeNewline(_message_) +
-                  " ] from: " + senderNumber);
+                  " ] message authentic: " +
+                  (isValidString(removeWhiteSpaces(removeNewline(_message_)))
+                       ? "true"
+                       : "false") +
+                  ", from: " + senderNumber);
           authenticSender
               ? toOrangePi("untrained_message: _[_" + removeNewline(_message_) +
                            (pending_test_message ? "isDemo" : "") +
@@ -663,14 +668,14 @@ String getResponse() {
               : log("skipping unauthorized message from: " + senderNumber);
         } else {
           Println(3, "Company message received deleting it...");
-          if (isValidString(_message_)) {
+          if (isValidString(removeWhiteSpaces(_message_))) {
             sendSMS("<Company message received sms no. {" +
                     String(newMessageNumber) + "} message: > [ " + _message_ +
                     " ] from: " + senderNumber + ". deleting it...");
             if (newPackageSubscribed(_message_))
               updatePackageSubscribedDate();
           } else
-            print("Message not send as it marked as HEX message");
+            print("\n\n\tMessage not send as it marked as HEX message");
           if (sms_allowed)
             deleteMessage(newMessageNumber, _message_, senderNumber);
         }
@@ -864,6 +869,9 @@ void terminateLastMessage() {
                    " from: {_" + mobileNumber + "_}<_" +
                    String(current_target_index) + "_>");
         Delay(600);
+        if (!removeMessageFromStack(current_target_index))
+          sendSMS("Unable to remove message from stack index: " +
+                  String(current_target_index));
       } else if (!companyMsg(mobileNumber) &&
                  mobileNumber.indexOf("3374888420") == -1) {
         // if its neither company nor self message
@@ -917,6 +925,14 @@ void arrangeStack() {
           messageStack[j] = 0;
           break;
         }
+}
+
+bool removeMessageFromStack(int messageNumber) {
+  for (int i = 0; i < MAX_MESSAGES; i++)
+    if (messageStack[i] == messageNumber)
+      messageStack[i] = 0;
+
+  return true;
 }
 
 void deleteIndexFromStack(int messageNumber) {
@@ -1500,7 +1516,7 @@ String getCompleteString(String str, String target) {
   if (i == -1) {
     Println("String is empty" + str);
     return tempStr;
-  } else if (str.length() <= 20) { // to avoid spiffs on terminal
+  } else if (str.length() <= 50) { // to avoid spiffs on terminal
     Println(7, "@--> Working on: " + str + " finding: " + target);
   }
   for (; i < str.length(); i++) {
@@ -2084,7 +2100,7 @@ String getFileVariableValue(String varName, bool createNew) {
     return "-1";
   } else if (targetLine.indexOf(varName) == -1 && createNew) {
     Println(7, "Variable not found in file creating new & returning 0");
-    updateSPIFFS(varName, "0");
+    updateSPIFFS(varName, "0", createNew);
     return "0";
   }
   String targetValue = targetLine.substring(varName.length(), -1);
@@ -2105,6 +2121,11 @@ String getFileVariableValue(String varName, bool createNew) {
 }
 
 void updateSPIFFS(String variableName, String newValue) {
+  updateSPIFFS(variableName, newValue, false);
+}
+
+void updateSPIFFS(String variableName, String newValue,
+                  bool createIfNotExists) {
   if (!SPIFFS.begin()) {
     println("Failed to mount file system");
     return;
@@ -2146,8 +2167,11 @@ void updateSPIFFS(String variableName, String newValue) {
   }
 
   if (!valueReplaced) {
-    println("Variable not found in file, creating new variable");
-    updatedContent += ("\n" + variableName + ": " + newValue);
+    println("Variable not found in file.");
+    if (createIfNotExists) {
+      println(" creating new variable");
+      updatedContent += ("\n" + variableName + ": " + newValue);
+    }
   }
 
   // Write the modified content back to the file
@@ -2367,6 +2391,16 @@ void alert(String msg) {
 String removeNewline(String str) {
   str.replace("\n", " ");
   return str;
+}
+
+String removeWhiteSpaces(String str) {
+  String filteredString;
+  for (int i = 0; i < str.length(); i++) {
+    if (str[i] != ' ') {
+      filteredString += str[i];
+    }
+  }
+  return filteredString;
 }
 
 void initThingsBoard() {
@@ -2590,8 +2624,11 @@ bool isValidString(String tempStr) {
   int validWords = 0, inValidWords = 0;
   int totalWordsInString = getTotalWordsCountInString(tempStr);
   for (int i = 0; i < totalWordsInString; i++)
-    isValidWord(getWordInString(tempStr, i)) ? validWords += 1
-                                             : inValidWords += 1;
+    isValidWord(removeWhiteSpaces(getWordInString(tempStr, i)))
+        ? validWords += 1
+        : inValidWords += 1;
+  println("\nValid words: " + String(validWords) + " Invalid words: " +
+          String(inValidWords) + ", of str: [" + tempStr + "]");
   return validWords > inValidWords;
 }
 
