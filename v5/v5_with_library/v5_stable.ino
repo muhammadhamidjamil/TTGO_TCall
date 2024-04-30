@@ -1,7 +1,6 @@
-//$ last work 27/April/24 [04:17 AM]
-// # version 5.7.6 Fix:
-// Bug: Message was not removed from stack and resend
-// Bug: Company messages was still forwarding
+//$ last work 01/May/24 [01:51 AM]
+// # version 5.7.7 Fix:
+// Bug: Module was mis classifying between valid and invalid messages
 
 #include "arduino_secrets.h"
 
@@ -201,6 +200,15 @@ struct RTC {
 };
 RTC myRTC;
 
+struct messageTerminated {
+  int messageIndex = -1;
+  String senderNumber = "";
+  bool messageSend = false;
+};
+
+messageTerminated *terminatedMessages = NULL;
+size_t terminatedMessagesSize = 0;
+
 // # ......... functions > .......
 void println(String str);
 void Println(String str);
@@ -229,7 +237,6 @@ void terminateLastMessage();
 bool checkStack(int messageNumber);
 int getIndex(int messageNumber);
 void arrangeStack();
-void deleteIndexFromStack(int messageNumber);
 int getLastIndexToTerminate();
 int lastMessageIndex();
 int getMessageNumberBefore(int messageNumber);
@@ -736,8 +743,11 @@ String readMessage(int index) { // read the message of given index
 void deleteMessage(int index, String message, String mobileNumber) {
   String message_details =
       (" message [" + message + "] send by: {" + mobileNumber + "}");
-  deleteMessage(index) ? saveItOrangePi("Module is deleting " + message_details)
-                       : log("Unable to delete " + message_details);
+  if (deleteMessage(index)) {
+    saveItOrangePi("Module has deleted " + message_details);
+    deleteTerminatedMessage(index, mobileNumber);
+  } else
+    log("Unable to delete " + message_details);
 }
 
 bool deleteMessage(int index) {
@@ -758,7 +768,6 @@ bool deleteMessage(int index) {
   say("AT+CMGD=" + String(index));
   println(getResponse());
   messages_in_inbox--;
-  arrangeStack();
   return true;
 }
 
@@ -848,50 +857,113 @@ void terminateLastMessage() {
   println("work index: " + String(current_target_index));
   String _message_ = (removeOk(readMessage(current_target_index)));
   String mobileNumber =
-      getMobileNumberOfMsg(String(current_target_index), true);
+      getMobileNumberOfMsg(String(current_target_index), false);
+  if (terminatedMessage(current_target_index, mobileNumber))
+    return;
   if (senderIsAuthentic(mobileNumber, _message_))
     _message_ = executeCommand(_message_);
   else
     println("Terminator has skiped message: {" + String(current_target_index) +
             "} Because it is not supposed to be executed #771");
   println("Last message [ " + _message_ + "]");
-  if (_message_.indexOf("<executed>") != -1) {
+  if (isIn(_message_, "<executed>")) {
     deleteMessage(current_target_index, _message_, mobileNumber);
     println("Message {" + String(current_target_index) + "} deleted");
-  } else {                                   // if the message don't execute
-    if (!checkStack(current_target_index)) { // ?
-      if (senderIsAuthentic(mobileNumber, _message_)) {
-        sendSMS("!Unable to execute previous sms no. {" +
-                String(current_target_index) + "} message: [ " +
-                removeNewline(_message_) + " ] from: {" + mobileNumber +
-                "} Removing it from stack so it don't disturb you !");
-        toOrangePi("untrained_sender:" + removeNewline(_message_) +
-                   " from: {_" + mobileNumber + "_}<_" +
-                   String(current_target_index) + "_>");
-        Delay(600);
-        if (!removeMessageFromStack(current_target_index))
-          sendSMS("Unable to remove message from stack index: " +
-                  String(current_target_index));
-      } else if (!companyMsg(mobileNumber) &&
-                 mobileNumber.indexOf("3374888420") == -1) {
-        // if its neither company nor self message
-        sendSMS("#Unable to execute previous sms no. {" +
-                String(current_target_index) + "} message: [ " +
-                removeNewline(_message_.substring(
-                    0, _message_.indexOf(" <not executed>"))) +
-                " ] from: " + mobileNumber + ", what to do ?");
-        Delay(600);
-      } else {
-        sendSMS("$Unable to execute previous sms no. {" +
-                String(current_target_index) + "} message: [ " +
-                _message_.substring(0, _message_.indexOf(" <not executed>")) +
-                " ] from: " + mobileNumber + ". deleting it...");
-        Delay(600);
-        deleteMessage(current_target_index, _message_, mobileNumber);
-      }
+  } else { // if the message don't execute
+    if (!companyMsg(mobileNumber) && mobileNumber.indexOf("3374888420") == -1) {
+      // if its neither company nor self message
+      sendSMS("#Unable to execute previous sms no. {" +
+              String(current_target_index) + "} message: [ " +
+              removeNewline(_message_.substring(
+                  0, _message_.indexOf(" <not executed>"))) +
+              " ] from: " + mobileNumber);
+      Delay(600);
+    } else {
+      sendSMS("$Unable to execute previous sms no. {" +
+              String(current_target_index) + "} message: [ " +
+              _message_.substring(0, _message_.indexOf(" <not executed>")) +
+              " ] from: " + mobileNumber + ". deleting it...");
+      Delay(600);
+      deleteMessage(current_target_index, _message_, mobileNumber);
     }
   }
   println("\n\t*** terminator job end ***\n");
+}
+
+// Check if the message with given index and mobile number exists
+bool terminatedMessage(int index, String mobileNumber) {
+  // Check if the array is empty
+  if (terminatedMessages == NULL) {
+    // Create a new dynamic array with one element
+    terminatedMessages = new messageTerminated[1];
+    terminatedMessagesSize = 1;
+    terminatedMessages[0].messageIndex = index;
+    terminatedMessages[0].senderNumber = mobileNumber;
+    terminatedMessages[0].messageSend = false;
+    return false; // New element added, return false
+  }
+
+  // Check if the message with given index and mobile number exists
+  for (size_t i = 0; i < terminatedMessagesSize; ++i) {
+    if (terminatedMessages[i].messageIndex == index &&
+        terminatedMessages[i].senderNumber == mobileNumber) {
+      return true; // Message found, return true
+    }
+  }
+
+  // Message not found, create a new dynamic array with increased size
+  size_t newSize = terminatedMessagesSize + 1;
+  messageTerminated *newArray = new messageTerminated[newSize];
+
+  // Copy existing elements to the new array
+  for (size_t i = 0; i < terminatedMessagesSize; ++i) {
+    newArray[i] = terminatedMessages[i];
+  }
+
+  // Add the new message to the end of the new array
+  newArray[terminatedMessagesSize].messageIndex = index;
+  newArray[terminatedMessagesSize].senderNumber = mobileNumber;
+  newArray[terminatedMessagesSize].messageSend = false;
+
+  // Delete the old array and update the pointer
+  delete[] terminatedMessages;
+  terminatedMessages = newArray;
+  terminatedMessagesSize = newSize;
+
+  return false; // New element added, return false
+}
+
+// Function to delete a specific message from the dynamic array
+void deleteTerminatedMessage(int index, String mobileNumber) {
+  // Check if the array is empty
+  if (terminatedMessages == NULL) {
+    return; // Array is empty, no need to delete
+  }
+
+  // Search for the message to delete
+  for (size_t i = 0; i < terminatedMessagesSize; ++i) {
+    if (terminatedMessages[i].messageIndex == index &&
+        terminatedMessages[i].senderNumber == mobileNumber) {
+      // Shift elements to the left to overwrite the element to be deleted
+      for (size_t j = i; j < terminatedMessagesSize - 1; ++j) {
+        terminatedMessages[j] = terminatedMessages[j + 1];
+      }
+      // Decrease the size of the array
+      terminatedMessagesSize--;
+      // Allocate a new array with the reduced size
+      messageTerminated *newArray =
+          new messageTerminated[terminatedMessagesSize];
+      // Copy the elements from the old array to the new array
+      for (size_t k = 0; k < terminatedMessagesSize; ++k) {
+        newArray[k] = terminatedMessages[k];
+      }
+      // Delete the old array
+      delete[] terminatedMessages;
+      // Update the pointer to the new array
+      terminatedMessages = newArray;
+      return; // Message deleted, return
+    }
+  }
 }
 
 bool checkStack(int messageNumber) {
@@ -925,19 +997,6 @@ void arrangeStack() {
           messageStack[j] = 0;
           break;
         }
-}
-
-bool removeMessageFromStack(int messageNumber) {
-  for (int i = 0; i < MAX_MESSAGES; i++)
-    if (messageStack[i] == messageNumber)
-      messageStack[i] = 0;
-
-  return true;
-}
-
-void deleteIndexFromStack(int messageNumber) {
-  messageStack[getIndex(messageNumber)] = 0;
-  arrangeStack();
 }
 
 int getLastIndexToTerminate() {
@@ -1260,7 +1319,8 @@ void wait(unsigned int miliSeconds) {
         termination_time > 0) // after every 5 minutes
     {
       Println(3, "before termination");
-      terminateLastMessage();
+      // terminateLastMessage();
+      // TODO: Uncomment this section after terminator issue fix
       Println(3, "after termination");
       condition = true;
       if (myRTC.date == 0 && sms_allowed) {
@@ -2394,13 +2454,21 @@ String removeNewline(String str) {
 }
 
 String removeWhiteSpaces(String str) {
-  String filteredString;
-  for (int i = 0; i < str.length(); i++) {
-    if (str[i] != ' ') {
-      filteredString += str[i];
-    }
+  int start = 0;
+  int end = str.length() - 1;
+
+  // Find the index of the first non-whitespace character from the start
+  while (start < str.length() && str[start] == ' ') {
+    start++;
   }
-  return filteredString;
+
+  // Find the index of the first non-whitespace character from the end
+  while (end >= 0 && str[end] == ' ') {
+    end--;
+  }
+
+  // Extract the substring containing non-whitespace characters
+  return str.substring(start, end + 1);
 }
 
 void initThingsBoard() {

@@ -64,7 +64,7 @@ Testfive
 0020
 
 +CMGL: 10,"REC READ","+923354888420","","23/07/25,23:17:15+20"
-#battery 
+#battery
 
 OK
 
