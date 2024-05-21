@@ -1635,6 +1635,7 @@ int fetchNumber(String str) {
   return number.toInt();
 }
 
+// ! Main here:
 void inputManager(String command, int inputFrom) {
   // when you ant to ad new command just try to add as above as you can and make
   // sure you dont make any conflict with pre use strings.
@@ -2783,6 +2784,7 @@ String manageBlynk(String message) {
   // although need to extract pin number and state
   String pin_number = removeNewline(message);
 
+  log("Updating blynk state message: " + message);
   return blynk.updateBlynkState(blynk_servo_pin,
                                 isIn(message, "on", "open", "Open") ? 1 : 0);
 }
