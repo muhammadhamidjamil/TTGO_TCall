@@ -1,6 +1,6 @@
-//$ last work 01/May/24 [01:51 AM]
-// # version 5.7.7 Fix:
-// Bug: Module was mis classifying between valid and invalid messages
+//$ last work 03/June/24 [12:17 AM]
+// # version 5.7.8 Fix:
+// Bug: Module keep rebooting
 
 #include "arduino_secrets.h"
 
@@ -870,7 +870,7 @@ void terminateLastMessage() {
     deleteMessage(current_target_index, _message_, mobileNumber);
     println("Message {" + String(current_target_index) + "} deleted");
   } else { // if the message don't execute
-    if (!companyMsg(mobileNumber) && mobileNumber.indexOf("3374888420") == -1) {
+    if (!companyMsg(mobileNumber) && isIn(mobileNumber, "3374888420")) {
       // if its neither company nor self message
       sendSMS("#Unable to execute previous sms no. {" +
               String(current_target_index) + "} message: [ " +
@@ -2090,7 +2090,7 @@ String getHTTPString(String message) {
 }
 
 bool newPackageSubscribed(String str) {
-  if (str.indexOf("10000 SMS with 30day validity") != -1)
+  if (isIn(str, "SMS with 30day validity has been subscribed"))
     return true;
   return false;
 }
