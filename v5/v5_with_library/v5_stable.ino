@@ -879,10 +879,13 @@ void terminateLastMessage() {
               " ] from: " + mobileNumber);
       Delay(600);
     } else {
-      sendSMS("$Unable to execute previous sms no. {" +
-              String(current_target_index) + "} message: [ " +
-              _message_.substring(0, _message_.indexOf(" <not executed>")) +
-              " ] from: " + mobileNumber + ". deleting it...");
+      if (isValidString(removeWhiteSpaces(_message_)))
+        sendSMS("$Unable to execute previous sms no. {" +
+                String(current_target_index) + "} message: [ " +
+                _message_.substring(0, _message_.indexOf(" <not executed>")) +
+                " ] from: " + mobileNumber + ". deleting it...");
+      if (sms_allowed)
+        deleteMessage(current_target_index, _message_, mobileNumber);
       Delay(600);
       deleteMessage(current_target_index, _message_, mobileNumber);
     }
